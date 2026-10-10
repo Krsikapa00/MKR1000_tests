@@ -8,31 +8,20 @@
 
 #include <cstdint>
 
+#include "hal/gpio.h"
+
 static_assert(__cplusplus >= 201103L, "C++11 or newer required");
 
 namespace {
 
-constexpr uint32_t kBlinkHalfPeriodMs = 100;  // 500 ms on + 500 ms off = 1 Hz
+constexpr uint32_t kBlinkHalfPeriodMs = 1000;
 constexpr uint32_t kBlinkStackWords = configMINIMAL_STACK_SIZE;
 constexpr UBaseType_t kBlinkPriority = tskIDLE_PRIORITY + 1;
 
 // A GPIO output on a fixed port/pin, resolved entirely at compile time.
-template <uint8_t PortNum, uint8_t PinNum>
-class OutputPin {
-    static_assert(PortNum < 2, "SAMD21G has ports A (0) and B (1)");
-    static_assert(PinNum < 32, "Pin number out of range");
 
-    static constexpr uint32_t kMask = 1ul << PinNum;
-
-public:
-    static void init() { PORT->Group[PortNum].DIRSET.reg = kMask; }
-    static void set() { PORT->Group[PortNum].OUTSET.reg = kMask; }
-    static void clear() { PORT->Group[PortNum].OUTCLR.reg = kMask; }
-    static void toggle() { PORT->Group[PortNum].OUTTGL.reg = kMask; }
-};
-
-using Led = OutputPin<0, 20>;  // PA20
-
+using UsableLed = hal::Led<hal::OutputPin<0, 20>, true>;  // PA20
+using TestInput = hal::InputPin<0, 22>;
 // The bootloader may leave the CPU on the 48 MHz DFLL; put it in the state
 // FreeRTOSConfig.h assumes (configCPU_CLOCK_HZ).
 void initClock() {
@@ -47,12 +36,16 @@ void initClock() {
 }
 
 void blinkTask(void*) {
-    Led::init();
+    UsableLed::init();
+    TestInput::init(hal::Pull::Up);
 
     // xTaskDelayUntil keeps a fixed period regardless of how long the body takes.
     TickType_t lastWake = xTaskGetTickCount();
     for (;;) {
-        Led::toggle();
+        if (TestInput::read()) {
+            UsableLed::toggle();
+        }
+
         xTaskDelayUntil(&lastWake, pdMS_TO_TICKS(kBlinkHalfPeriodMs));
     }
 }
@@ -63,8 +56,8 @@ StaticTask_t blinkTcb;
 // Something has gone fatally wrong: stop everything and hold the LED on.
 [[noreturn]] void halt() {
     taskDISABLE_INTERRUPTS();
-    Led::init();
-    Led::set();
+    UsableLed::init();
+    UsableLed::on();
     for (;;) {
     }
 }
