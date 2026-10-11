@@ -1,4 +1,4 @@
-// FreeRTOS blink for the Arduino MKR1000 (ATSAMD21G18A).
+// Arduino MKR1000 (ATSAMD21G18A).
 
 #include <sam.h>
 
@@ -17,6 +17,8 @@
 static_assert(__cplusplus >= 201103L, "C++11 or newer required");
 
 namespace {
+
+using UsableLed = hal::Led<hal::OutputPin<0, 20>, true>;  // PA20
 
 constexpr uint32_t    task1StackWords = configMINIMAL_STACK_SIZE;
 constexpr UBaseType_t task1Priority   = tskIDLE_PRIORITY + 1;
@@ -52,14 +54,12 @@ void initClock() {
 }
 
 void noMutexTask(void*) {
-    // for (;;) {
         for (int i = 0; i < 10000; i++) {
             uint32_t tmp = counter;
             taskYIELD();
             counter = tmp + 1;
         }
         xTaskNotifyGive(reporterHandle);
-    // }
     for (;;) {
         vTaskSuspend(nullptr);
     }
@@ -92,7 +92,7 @@ void reporterTask(void*) {
 // Something has gone fatally wrong: stop everything and hold the LED on.
 [[noreturn]] void halt() {
     taskDISABLE_INTERRUPTS();
-
+    UsableLed::on();
     for (;;) {
     }
 }
