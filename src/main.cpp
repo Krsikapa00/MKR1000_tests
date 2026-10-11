@@ -9,18 +9,35 @@
 
 #include "hal/gpio.h"
 #include "hal/uart.h"
+#include "rtos/mutex.h"
+#include "rtos/lock_guard.h"
+
+#include "app/log.h"
 
 static_assert(__cplusplus >= 201103L, "C++11 or newer required");
 
 namespace {
 
-constexpr uint32_t kBlinkHalfPeriodMs = 1000;
-constexpr uint32_t kBlinkStackWords = configMINIMAL_STACK_SIZE;
-constexpr UBaseType_t kBlinkPriority = tskIDLE_PRIORITY + 1;
+constexpr uint32_t    task1StackWords = configMINIMAL_STACK_SIZE;
+constexpr UBaseType_t task1Priority   = tskIDLE_PRIORITY + 1;
+constexpr uint32_t    task2StackWords = configMINIMAL_STACK_SIZE;
+constexpr UBaseType_t task2Priority   = tskIDLE_PRIORITY + 1;
+constexpr uint32_t    reporterTaskStackWords = configMINIMAL_STACK_SIZE;
+constexpr UBaseType_t reporterTaskPriority   = tskIDLE_PRIORITY + 1;
 
-using UsableLed = hal::Led<hal::OutputPin<0, 20>, true>;  // PA20
-using TestInput = hal::InputPin<0, 22>;
-using Uart5 = hal::Sercom5Uart<115200>;
+StackType_t  task1Stack[task1StackWords];
+StaticTask_t task1Tcb;
+StackType_t  task2Stack[task2StackWords];
+StaticTask_t task2Tcb;
+StackType_t  reportTaskStack[reporterTaskStackWords];
+StaticTask_t reportTaskTcb;
+TaskHandle_t reporterHandle;
+
+using Mutex = rtos::Mutex;
+
+Mutex    counterMutex;
+uint32_t counter = 0;
+
 // The bootloader may leave the CPU on the 48 MHz DFLL; put it in the state
 // FreeRTOSConfig.h assumes (configCPU_CLOCK_HZ).
 void initClock() {
@@ -34,29 +51,48 @@ void initClock() {
     }
 }
 
-void blinkTask(void*) {
-    UsableLed::init();
-    TestInput::init(hal::Pull::Up);
-
-    // xTaskDelayUntil keeps a fixed period regardless of how long the body takes.
-    TickType_t lastWake = xTaskGetTickCount();
-    for (;;) {
-        if (TestInput::read()) {
-            UsableLed::toggle();
+void noMutexTask(void*) {
+    // for (;;) {
+        for (int i = 0; i < 10000; i++) {
+            uint32_t tmp = counter;
+            taskYIELD();
+            counter = tmp + 1;
         }
-
-        xTaskDelayUntil(&lastWake, pdMS_TO_TICKS(kBlinkHalfPeriodMs));
+        xTaskNotifyGive(reporterHandle);
+    // }
+    for (;;) {
+        vTaskSuspend(nullptr);
     }
 }
 
-StackType_t blinkStack[kBlinkStackWords];
-StaticTask_t blinkTcb;
+void mutexTask(void*) {
+    for (int i = 0; i < 10000; i++) {
+        rtos::LockGuard guard(counterMutex, portMAX_DELAY);
+        uint32_t tmp = counter;
+        taskYIELD();
+        counter = tmp + 1;
+    }
+    xTaskNotifyGive(reporterHandle);
+
+    for (;;) {
+        vTaskSuspend(nullptr);
+    }
+}
+
+void reporterTask(void*) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    app::Log::line("counter=", counter, " expected=", 20000);
+
+    for (;;) {
+        vTaskSuspend(nullptr);
+    }
+}
 
 // Something has gone fatally wrong: stop everything and hold the LED on.
 [[noreturn]] void halt() {
     taskDISABLE_INTERRUPTS();
-    UsableLed::init();
-    UsableLed::on();
+
     for (;;) {
     }
 }
@@ -81,10 +117,15 @@ void vApplicationStackOverflowHook(TaskHandle_t /*task*/, char* /*name*/) {
 
 int main() {
     initClock();
-    Uart5::init();
+    app::Log::init();
 
-    xTaskCreateStatic(blinkTask, "blink", kBlinkStackWords, nullptr, kBlinkPriority, blinkStack,
-                      &blinkTcb);
+    xTaskCreateStatic(noMutexTask, "task1", task1StackWords, nullptr, task1Priority, task1Stack,
+                      &task1Tcb);
+    xTaskCreateStatic(noMutexTask, "task2", task2StackWords, nullptr, task2Priority, task2Stack,
+                      &task2Tcb);
+    reporterHandle = xTaskCreateStatic(reporterTask, "reporterTask", reporterTaskStackWords, nullptr, reporterTaskPriority, reportTaskStack,
+                      &reportTaskTcb);
+
 
     vTaskStartScheduler();  // does not return while the scheduler runs
     halt();
