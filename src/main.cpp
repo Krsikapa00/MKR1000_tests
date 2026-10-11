@@ -1,5 +1,4 @@
 // FreeRTOS blink for the Arduino MKR1000 (ATSAMD21G18A).
-// One task toggles the on-board LED (PA20) every 500 ms: a 1 Hz blink.
 
 #include <sam.h>
 
@@ -9,6 +8,7 @@
 #include <cstdint>
 
 #include "hal/gpio.h"
+#include "hal/uart.h"
 
 static_assert(__cplusplus >= 201103L, "C++11 or newer required");
 
@@ -18,10 +18,9 @@ constexpr uint32_t kBlinkHalfPeriodMs = 1000;
 constexpr uint32_t kBlinkStackWords = configMINIMAL_STACK_SIZE;
 constexpr UBaseType_t kBlinkPriority = tskIDLE_PRIORITY + 1;
 
-// A GPIO output on a fixed port/pin, resolved entirely at compile time.
-
 using UsableLed = hal::Led<hal::OutputPin<0, 20>, true>;  // PA20
 using TestInput = hal::InputPin<0, 22>;
+using Uart5 = hal::Sercom5Uart<115200>;
 // The bootloader may leave the CPU on the 48 MHz DFLL; put it in the state
 // FreeRTOSConfig.h assumes (configCPU_CLOCK_HZ).
 void initClock() {
@@ -82,6 +81,7 @@ void vApplicationStackOverflowHook(TaskHandle_t /*task*/, char* /*name*/) {
 
 int main() {
     initClock();
+    Uart5::init();
 
     xTaskCreateStatic(blinkTask, "blink", kBlinkStackWords, nullptr, kBlinkPriority, blinkStack,
                       &blinkTcb);
